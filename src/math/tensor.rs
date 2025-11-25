@@ -136,6 +136,49 @@ where
         self.shape = new_shape;
         self.strides = new_strides;
     }
+
+    // Get the maximum value in the tensor
+    pub fn max(&self) -> T
+    where
+        T: PartialOrd,
+    {
+        let mut max_value = self.data[0];
+        for &value in &self.data {
+            if value > max_value {
+                max_value = value;
+            }
+        }
+        max_value
+    }
+
+    // Slice the tensor
+    // TODO: Returns a new tensor. Maybe a subview would be better for performance.
+    pub fn slice(&self, ranges: &[std::ops::Range<usize>]) -> Tensor<T> {
+        assert_eq!(ranges.len(), self.rank);
+
+        let new_shape: Vec<usize> = ranges.iter().map(|r| r.end - r.start).collect();
+        let new_strides = Self::compute_strides(&new_shape);
+        let new_data_size: usize = new_shape.iter().product();
+        let mut new_data: Vec<T> = vec![T::zero(); new_data_size];
+
+        for (i, elem) in new_data.iter_mut().enumerate() {
+            let new_indices = self.unflatten(i, &new_strides);
+            let original_indices: Vec<usize> = new_indices
+                .iter()
+                .enumerate()
+                .map(|(dim, &idx)| idx + ranges[dim].start)
+                .collect();
+            let original_index = self.flatten(&original_indices, &self.strides);
+            *elem = self.data[original_index];
+        }
+
+        Tensor {
+            shape: new_shape,
+            rank: self.rank,
+            strides: new_strides,
+            data: new_data,
+        }
+    }
 }
 
 impl<T> ops::Index<&[usize]> for Tensor<T>
@@ -157,5 +200,43 @@ where
     fn index_mut(&mut self, indices: &[usize]) -> &mut T {
         let index = self.flatten(indices, &self.strides);
         &mut self.data[index]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_tensor_indexing() {
+        let shape = vec![2, 3, 4];
+        let data_size = shape.iter().product();
+        let data = (0..data_size).map(|v| v as i32).collect::<Vec<i32>>();
+
+        let tensor = Tensor::new(data, shape);
+
+        assert_eq!(tensor[&[0, 0, 0]], 0);
+        assert_eq!(tensor[&[1, 2, 3]], 23);
+    }
+
+    #[test]
+    fn test_tensor_slicing() {
+        let shape = vec![2, 3];
+        let data_size = shape.iter().product();
+        let data = (1..=data_size).map(|v| v as i32).collect::<Vec<i32>>();
+
+        let tensor = Tensor::new(data, shape);
+
+        // slice all rows, last two columns: cols 1..3
+        let view = tensor.slice(&[0..2, 1..3]);
+        assert_eq!(view.shape(), &[2, 2]);
+
+        // original layout:
+        // [ [1,2,3],
+        //   [4,5,6] ]
+        assert_eq!(view[&[0, 0]], 2);
+        assert_eq!(view[&[0, 1]], 3);
+        assert_eq!(view[&[1, 0]], 5);
+        assert_eq!(view[&[1, 1]], 6);
     }
 }

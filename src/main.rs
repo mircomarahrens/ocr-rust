@@ -1,4 +1,5 @@
 use clap::Parser;
+use rocr::nets::convolutional_layer;
 use rocr::nets::convolutional_layer::ConvolutionalLayer;
 use rocr::nets::im2col;
 use std::fs::File;
@@ -10,7 +11,7 @@ use rocr::data::idx::{Idx1, Idx3};
 use rocr::math::tensor::Tensor;
 
 #[derive(Parser)]
-struct Config {
+struct Args {
     images_path: PathBuf,
     labels_path: PathBuf,
 }
@@ -19,7 +20,7 @@ fn main() -> std::io::Result<()> {
     env_logger::init();
 
     // parse config
-    let args = Config::parse();
+    let args = Args::parse();
 
     let images_path = args.images_path.to_str().unwrap();
     let labels_path = args.labels_path.to_str().unwrap();
@@ -143,6 +144,46 @@ fn main() -> std::io::Result<()> {
     //        println!();
     //    }
 
+    println!();
+    println!("=====================");
+    println!();
+
+    let range_x = 1..3;
+    let range_y = 1..3;
+
+    for i in range_x.clone() {
+        for j in range_y.clone() {
+            print!("{:4} ", matrix[&[i, j]]);
+        }
+        println!();
+    }
+
+    println!();
+    println!("=====================");
+    println!();
+
+    let tv = matrix.slice(&[range_x, range_y]);
+
+    for i in 0..2 {
+        for j in 0..2 {
+            print!("{:4} ", tv[&[i, j]]);
+        }
+        println!();
+    }
+
+    println!("Sliced tensor shape: {:?}", tv.shape());
+
+    let m = tv.max();
+    println!("Max value in sliced tensor: {}", m);
+
+    // let cl = ConvolutionalLayer::with_activation(
+    //     8,
+    //     vec![3, 3, 1],
+    //     1,
+    //     1,
+    //     Some(convolutional_layer::Activation::ReLU),
+    // )
+
     Ok(())
 }
 
@@ -189,4 +230,16 @@ fn print_images(images: Vec<u8>, chunk_size: usize) {
             println!();
         }
     }
+}
+
+fn training() {
+    // TODO implement training loop
+}
+
+fn evaluate() {
+    // TODO implement evaluation loop
+}
+
+fn inference() {
+    // TODO implement inference loop
 }

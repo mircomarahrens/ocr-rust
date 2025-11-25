@@ -144,7 +144,42 @@ mod tests {
         let stride = 4;
         let zero_padding = 0;
 
-        let conv = ConvolutionalLayer::new(num_filters, spatial_extent, stride, zero_padding);
+        let conv =
+            ConvolutionalLayer::new(num_filters, spatial_extent.clone(), stride, zero_padding);
+
+        let w_1 = 227;
+        let h_1 = 227;
+        let d_1 = 3;
+
+        let shape = vec![w_1, h_1, d_1];
+        let data_size = mul_vals(&shape);
+        let data = (1..data_size + 1).map(|v| v as f32).collect::<Vec<f32>>();
+        let mut input_volume = Tensor::new(data, shape.clone());
+
+        let output_volume = conv.forward(&mut input_volume);
+
+        let w_2 = (w_1 - spatial_extent[0] + 2 * zero_padding) / stride + 1;
+        let h_2 = (h_1 - spatial_extent[1] + 2 * zero_padding) / stride + 1;
+        let d_2 = num_filters;
+
+        assert_eq!(output_volume.shape(), vec![w_2, h_2, d_2]);
+    }
+
+    #[test]
+    fn test_forward_with_activation() {
+        // Test the forward pass of the convolutional layer with activation
+        let num_filters = 96;
+        let spatial_extent = vec![11, 11, 3];
+        let stride = 4;
+        let zero_padding = 0;
+
+        let conv = ConvolutionalLayer::with_activation(
+            num_filters,
+            spatial_extent,
+            stride,
+            zero_padding,
+            Activation::Relu,
+        );
 
         let shape = vec![227, 227, 3];
         let data_size = mul_vals(&shape);
@@ -154,5 +189,25 @@ mod tests {
         let output_volume = conv.forward(&mut input_volume);
 
         assert_eq!(output_volume.shape(), vec![55, 55, 96]);
+
+        // Check that all values are non-negative due to ReLU
+        for val in output_volume.get_data() {
+            assert!(*val >= 0.0);
+        }
+    }
+
+    #[test]
+    fn test_forward_with_padding() {
+        panic!("Not yet implemented");
+    }
+
+    #[test]
+    fn test_forward_with_activation_and_padding() {
+        panic!("Not yet implemented");
+    }
+
+    #[test]
+    fn test_backward() {
+        panic!("Not yet implemented");
     }
 }
