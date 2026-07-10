@@ -72,6 +72,11 @@ where
         &self.data
     }
 
+    // Get mutable reference to the tensor data
+    pub fn get_data_mut(&mut self) -> &mut Vec<T> {
+        &mut self.data
+    }
+
     // Compute the strides given a shape in row-major order
     fn compute_strides(shape: &[usize]) -> Vec<usize> {
         let d = shape.len();
@@ -116,18 +121,27 @@ where
         self.strides.clone()
     }
 
-    // Pad the tensor
+    // Pad the tensor. For image-like tensors (rank >= 3), pad only spatial axes.
     pub fn pad(&mut self, pad_spread: usize, pad_value: T)
     where
         T: Clone + Copy,
     {
-        let new_shape: Vec<usize> = self.shape.iter().map(|&dim| dim + 2 * pad_spread).collect();
+        let mut new_shape = self.shape.clone();
+        let padded_axes = if self.rank <= 2 { self.rank } else { 2 };
+
+        for dim in new_shape.iter_mut().take(padded_axes) {
+            *dim += 2 * pad_spread;
+        }
+
         let mut new_data: Vec<T> = vec![pad_value; new_shape.iter().product()];
         let new_strides = Self::compute_strides(&new_shape);
 
         for i in 0..self.data.len() {
             let indices = self.unflatten(i, &self.strides);
-            let new_indices: Vec<usize> = indices.iter().map(|&idx| idx + pad_spread).collect();
+            let mut new_indices = indices.clone();
+            for idx in new_indices.iter_mut().take(padded_axes) {
+                *idx += pad_spread;
+            }
             let new_index = self.flatten(&new_indices, &new_strides);
             new_data[new_index] = self.data[i];
         }

@@ -1,245 +1,241 @@
 use clap::Parser;
-use rocr::nets::convolutional_layer;
+use rocr::data::idx::{Idx1, Idx3};
+use rocr::math::loss::{CrossEntropyLoss, Softmax};
+use rocr::math::optimizer::SGD;
+use rocr::math::tensor::Tensor;
 use rocr::nets::convolutional_layer::ConvolutionalLayer;
-use rocr::nets::im2col;
+use rocr::nets::dense_layer::{Activation, DenseLayer};
+use rocr::nets::flatten_layer::FlattenLayer;
+use rocr::nets::layers::Layer;
+use rocr::nets::pooling_layer::PoolingLayer;
 use std::fs::File;
-use std::io::prelude::*;
 use std::io::BufReader;
 use std::path::PathBuf;
 
-use rocr::data::idx::{Idx1, Idx3};
-use rocr::math::tensor::Tensor;
-
 #[derive(Parser)]
 struct Args {
-    images_path: PathBuf,
-    labels_path: PathBuf,
+    #[arg(long)]
+    train_images: PathBuf,
+    #[arg(long)]
+    train_labels: PathBuf,
+    #[arg(long, default_value = "5")]
+    num_epochs: usize,
+    #[arg(long, default_value = "32")]
+    batch_size: usize,
+    #[arg(long, default_value = "0.01")]
+    learning_rate: f32,
+}
+
+struct LeNet {
+    conv1: ConvolutionalLayer<f32>,
+    pool1: PoolingLayer,
+    conv2: ConvolutionalLayer<f32>,
+    pool2: PoolingLayer,
+    flatten: FlattenLayer,
+    dense1: DenseLayer<f32>,
+    dense2: DenseLayer<f32>,
+    dense3: DenseLayer<f32>,
+}
+
+fn argmax_1d(tensor: &Tensor<f32>) -> usize {
+    let mut max_idx = 0usize;
+    let mut max_val = tensor[&[0]];
+    for i in 1..10 {
+        if tensor[&[i]] > max_val {
+            max_val = tensor[&[i]];
+            max_idx = i;
+        }
+    }
+    max_idx
+}
+
+impl LeNet {
+    fn new() -> Self {
+        LeNet {
+            conv1: ConvolutionalLayer::new(6, vec![3, 3, 1], 1, 1),
+            pool1: PoolingLayer::new(vec![2, 2], 2),
+            conv2: ConvolutionalLayer::new(16, vec![5, 5, 6], 1, 0),
+            pool2: PoolingLayer::new(vec![2, 2], 2),
+            flatten: FlattenLayer::new(),
+            dense1: DenseLayer::with_activation(400, 120, Activation::Sigmoid),
+            dense2: DenseLayer::with_activation(120, 84, Activation::Sigmoid),
+            dense3: DenseLayer::new(84, 10),
+        }
+    }
+
+    fn forward(&mut self, input: &mut Tensor<f32>) -> Tensor<f32> {
+        let c1 = self.conv1.forward(input);
+        let mut p1_in = c1;
+        let p1 = self.pool1.forward(&mut p1_in);
+        let mut c2_in = p1;
+        let c2 = self.conv2.forward(&mut c2_in);
+        let mut p2_in = c2;
+        let p2 = self.pool2.forward(&mut p2_in);
+        let mut f_in = p2;
+        let f = self.flatten.forward(&mut f_in);
+        let mut d1_in = f;
+        let d1 = self.dense1.forward(&mut d1_in);
+        let mut d2_in = d1;
+        let d2 = self.dense2.forward(&mut d2_in);
+        let mut d3_in = d2;
+        self.dense3.forward(&mut d3_in)
+    }
+
+    fn backward(&mut self, mut d_out: Tensor<f32>) -> Tensor<f32> {
+        let mut d_d3 = self.dense3.backward(&mut d_out);
+        let mut d_d2 = self.dense2.backward(&mut d_d3);
+        let mut d_d1 = self.dense1.backward(&mut d_d2);
+        let mut d_f = self.flatten.backward(&mut d_d1);
+        let mut d_p2 = self.pool2.backward(&mut d_f);
+        let mut d_c2 = self.conv2.backward(&mut d_p2);
+        let mut d_p1 = self.pool1.backward(&mut d_c2);
+        self.conv1.backward(&mut d_p1)
+    }
+
+    fn update_weights(&mut self, learning_rate: f32) {
+        let mut sgd = SGD::new(learning_rate);
+
+        sgd.update_weights(&mut self.dense3.weights, &self.dense3.d_weights);
+        sgd.update_bias(&mut self.dense3.bias, &self.dense3.d_bias);
+
+        sgd.update_weights(&mut self.dense2.weights, &self.dense2.d_weights);
+        sgd.update_bias(&mut self.dense2.bias, &self.dense2.d_bias);
+
+        sgd.update_weights(&mut self.dense1.weights, &self.dense1.d_weights);
+        sgd.update_bias(&mut self.dense1.bias, &self.dense1.d_bias);
+
+        sgd.update_weights(&mut self.conv2.weights, &self.conv2.d_weights);
+        sgd.update_bias(&mut self.conv2.bias, &self.conv2.d_bias);
+
+        sgd.update_weights(&mut self.conv1.weights, &self.conv1.d_weights);
+        sgd.update_bias(&mut self.conv1.bias, &self.conv1.d_bias);
+    }
 }
 
 fn main() -> std::io::Result<()> {
     env_logger::init();
 
-    // parse config
     let args = Args::parse();
 
-    let images_path = args.images_path.to_str().unwrap();
-    let labels_path = args.labels_path.to_str().unwrap();
+    println!("LeNet Training on MNIST");
+    println!("=======================");
+    println!("Train images: {:?}", args.train_images);
+    println!("Train labels: {:?}", args.train_labels);
+    println!("Epochs: {}", args.num_epochs);
+    println!("Batch size: {}", args.batch_size);
+    println!("Learning rate: {}", args.learning_rate);
+    println!();
 
-    // read header of file for images
-    let file = File::open(images_path).unwrap();
-    let mut reader = BufReader::new(file);
+    // Load MNIST data headers
+    let images_file = File::open(&args.train_images)?;
+    let mut images_reader = BufReader::new(images_file);
 
-    let mut current = reader.stream_position()?;
-    println!("Current position: {}", current);
+    let labels_file = File::open(&args.train_labels)?;
+    let mut labels_reader = BufReader::new(labels_file);
 
-    // The header contains basic information about the images
-    let header = Idx3::read_header(&mut reader)?;
+    let image_header = Idx3::read_header(&mut images_reader)?;
+    let label_header = Idx1::read_header(&mut labels_reader)?;
+
     println!(
-        "Magic number: {}, Num images: {}, rows: {}, cols: {}",
-        header.magic_num, header.num_images, header.shape.0, header.shape.1
+        "Loaded {} training images ({}x{})",
+        image_header.num_images, image_header.shape.0, image_header.shape.1
     );
+    println!("Loaded {} training labels", label_header.num_labels);
 
-    current = reader.stream_position()?;
-    println!("Current position: {}", current);
+    let num_samples = (image_header.num_images as usize).min(500); // Limit to 500 for demo
+    println!("Using {} samples for training\n", num_samples);
 
-    // TODO implement im2col following https://cs231n.github.io/convolutional-networks/
+    // Initialize model
+    let mut model = LeNet::new();
 
-    //    // Read and process each image chunk in parallel
-    //    let chunk_size = 1000; // Adjust the chunk size as needed
-    //    let mut handles = vec![];
-    //    loop {
-    //        let mut chunk = vec![0u8; chunk_size * 28 * 28]; // Assuming MNIST images are 28x28 pixels
-    //        match reader.read_exact(&mut chunk) {
-    //            Ok(_) => {
-    //                let handle = thread::spawn(move || {
-    //                    process_chunk(chunk, chunk_size);
-    //                });
-    //
-    //                handles.push(handle);
-    //            }
-    //            Err(ref e) if e.kind() == ErrorKind::UnexpectedEof => break, // Break if end of file
-    //            Err(e) => return Err(e), // Propagate other errors
-    //        }
-    //    }
-    //
-    //    // Wait for all threads to finish
-    //    for handle in handles {
-    //        handle.join().unwrap();
-    //    }
+    // Training loop
+    for epoch in 0..args.num_epochs {
+        let mut total_loss = 0.0f32;
+        let mut total_samples = 0;
+        let mut correct = 0;
 
-    let data = Idx3::read_next_image(&header, &mut reader)?;
-    print_image(data.clone());
+        // Reset readers for new epoch
+        let images_file = File::open(&args.train_images)?;
+        let mut images_reader = BufReader::new(images_file);
+        let labels_file = File::open(&args.train_labels)?;
+        let mut labels_reader = BufReader::new(labels_file);
 
-    let data = Idx3::read_next_image(&header, &mut reader)?;
-    print_image(data.clone());
+        Idx3::read_header(&mut images_reader)?;
+        Idx1::read_header(&mut labels_reader)?;
 
-    let data_f32 = data.iter().map(|x| *x as f32).collect();
-    let tensor_a = Tensor::new(data_f32, vec![28, 28]);
+        let num_batches = num_samples.div_ceil(args.batch_size);
+        for batch_idx in 0..num_batches {
+            let mut batch_loss = 0.0f32;
+            let mut batch_correct = 0;
+            let mut batch_sample_count = 0;
 
-    for i in 0..28 {
-        for j in 0..28 {
-            print!("{:4} ", tensor_a[&[i, j]]);
-        }
-        println!();
-    }
+            for sample_idx in 0..args.batch_size {
+                let actual_idx = batch_idx * args.batch_size + sample_idx;
+                if actual_idx >= num_samples {
+                    break;
+                }
 
-    // Test
-    let data_x = [1, 2, 3, 4, 5, 6];
-    let data_f32 = data_x.iter().map(|x| *x as f32).collect();
-    let mut matrix = Tensor::new(data_f32, vec![2, 3]);
-    matrix.reshape(vec![2, 3]);
+                // Read image
+                let img_data = image_header.read_next_image(&mut images_reader)?;
+                let img_normalized: Vec<f32> =
+                    img_data.iter().map(|&x| (x as f32) / 255.0).collect();
+                let mut image = Tensor::new(img_normalized, vec![28, 28, 1]);
 
-    println!();
-    println!("=====================");
-    println!();
+                // Read label from file
+                let label_val = Idx1::read_next_label(&mut labels_reader)? as usize;
 
-    for i in 0..2 {
-        for j in 0..3 {
-            print!("{:4} ", matrix[&[i, j]]);
-        }
-        println!();
-    }
+                // Create one-hot target
+                let mut target = Tensor::new(vec![0.0f32; 10], vec![10]);
+                target[&[label_val]] = 1.0;
 
-    println!();
-    println!("=====================");
-    println!();
+                // Forward pass
+                let logits = model.forward(&mut image);
+                let predictions = Softmax::forward(&logits);
 
-    // for i in matrix.strides() {
-    //     print!("{:4} ", i);
-    // }
+                // Compute loss
+                let loss = CrossEntropyLoss::forward(&predictions, &target);
+                batch_loss += loss;
 
-    println!();
-    println!("Old shape {:?}", matrix.shape());
+                // Get prediction accuracy
+                let max_idx = argmax_1d(&predictions);
+                if max_idx == label_val {
+                    batch_correct += 1;
+                }
 
-    println!("Apply padding of 1 with 0.0");
-    matrix.pad(1, 0.0);
+                // Backward pass
+                let d_out = CrossEntropyLoss::backward(&predictions, &target);
+                let _d_input = model.backward(d_out);
 
-    println!("New shape {:?}", matrix.shape());
-
-    // for i in matrix.strides() {
-    //     print!("{:4} ", i);
-    // }
-
-    println!();
-    println!("=====================");
-    println!();
-
-    for i in 0..4 {
-        for j in 0..5 {
-            print!("{:4} ", matrix[&[i, j]]);
-        }
-        println!();
-    }
-
-    //    matrix.reshape(vec![5, 4]);
-    //
-    //    println!();
-    //    println!("=====================");
-    //    println!();
-    //
-    //    for i in 0..5 {
-    //        for j in 0..4 {
-    //            print!("{:4} ", matrix[&[i, j]]);
-    //        }
-    //        println!();
-    //    }
-
-    println!();
-    println!("=====================");
-    println!();
-
-    let range_x = 1..3;
-    let range_y = 1..3;
-
-    for i in range_x.clone() {
-        for j in range_y.clone() {
-            print!("{:4} ", matrix[&[i, j]]);
-        }
-        println!();
-    }
-
-    println!();
-    println!("=====================");
-    println!();
-
-    let tv = matrix.slice(&[range_x, range_y]);
-
-    for i in 0..2 {
-        for j in 0..2 {
-            print!("{:4} ", tv[&[i, j]]);
-        }
-        println!();
-    }
-
-    println!("Sliced tensor shape: {:?}", tv.shape());
-
-    let m = tv.max();
-    println!("Max value in sliced tensor: {}", m);
-
-    // let cl = ConvolutionalLayer::with_activation(
-    //     8,
-    //     vec![3, 3, 1],
-    //     1,
-    //     1,
-    //     Some(convolutional_layer::Activation::ReLU),
-    // )
-
-    Ok(())
-}
-
-fn print_image(data: Vec<u8>) {
-    print!("       ");
-    for i in 0..28 {
-        print!("{:4} ", i);
-    }
-    println!();
-    print!("       ");
-    for _i in 0..35 {
-        print!("____");
-    }
-    println!();
-
-    for i in 0..28 {
-        print!("{:4} | ", i);
-        for j in 0..28 {
-            print!("{:4} ", data[i * 28 + j]);
-        }
-        println!();
-    }
-}
-
-fn print_images(images: Vec<u8>, chunk_size: usize) {
-    for c in 0..chunk_size {
-        let offset = c * 28 * 28;
-        print!("       ");
-        for i in 0..28 {
-            print!("{:4} ", i);
-        }
-        println!();
-        print!("       ");
-        for _i in 0..35 {
-            print!("____");
-        }
-        println!();
-
-        for i in 0..28 {
-            print!("{:4} | ", i);
-            for j in 0..28 {
-                print!("{:4} ", images[i * 28 + j + offset]);
+                // Update weights
+                model.update_weights(args.learning_rate);
+                batch_sample_count += 1;
             }
-            println!();
+
+            total_loss += batch_loss;
+            correct += batch_correct;
+            total_samples += batch_sample_count;
+
+            if batch_sample_count > 0 && (batch_idx + 1) % 5 == 0 {
+                let avg_batch_loss = batch_loss / (batch_sample_count as f32);
+                println!("  Batch {}: Loss = {:.6}", batch_idx + 1, avg_batch_loss);
+            }
         }
+
+        if total_samples == 0 {
+            println!("Epoch {} complete: no samples processed\n", epoch + 1);
+            continue;
+        }
+
+        let avg_loss = total_loss / (total_samples as f32);
+        let accuracy = correct as f32 / (total_samples as f32);
+        println!(
+            "Epoch {} complete: Avg Loss = {:.6}, Accuracy = {:.2}%\n",
+            epoch + 1,
+            avg_loss,
+            accuracy * 100.0
+        );
     }
-}
 
-fn training() {
-    // TODO implement training loop
-}
-
-fn evaluate() {
-    // TODO implement evaluation loop
-}
-
-fn inference() {
-    // TODO implement inference loop
+    println!("Training completed!");
+    Ok(())
 }

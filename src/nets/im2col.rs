@@ -30,20 +30,24 @@ pub fn calc_col_shape<T>(
 where
     T: Float,
 {
-    let mut col_shape = Vec::new();
     let input_shape = input_volume.shape();
+    assert!(
+        input_shape.len() == 3 && spatial_extent.len() == 3,
+        "Convolution expects rank-3 input and filter shapes [W, H, D]."
+    );
+    assert_eq!(
+        input_shape[2], spatial_extent[2],
+        "Input depth must match filter depth."
+    );
 
-    for (i, e) in input_shape.iter().enumerate() {
-        let divd = e - spatial_extent[i];
-        let divs = stride;
-        assert!(
-            divd % divs == 0,
-            "Invalid input for spatial extent or stride."
-        );
-        let res = divd / divs + 1;
-        col_shape.push(res);
-    }
-    col_shape
+    let w_divd = input_shape[0] - spatial_extent[0];
+    let h_divd = input_shape[1] - spatial_extent[1];
+    assert!(
+        w_divd % stride == 0 && h_divd % stride == 0,
+        "Invalid input for spatial extent or stride."
+    );
+
+    vec![w_divd / stride + 1, h_divd / stride + 1]
 }
 
 pub fn calc_x_col<T>(
@@ -59,38 +63,71 @@ where
     let width = col_shape[0];
     let height = col_shape[1];
 
-    let x_col_size = mul_vals(col_shape);
+    let x_col_size = width * height;
     let x_col_shape = vec![filter_size, x_col_size];
     let x_col_data = vec![zero(); mul_vals(&x_col_shape)];
 
-    // TODO this is a bit ugly, maybe there is a better way to do this
-    // calculate the x_col
     let mut x_col = Tensor::new(x_col_data, x_col_shape);
     for i in 0..width {
-        // move forward in x direction
         let x = i * stride;
         for j in 0..height {
-            // move forward in y direction
             let y = j * stride;
 
-            // get patch and assign to x_col
             for k in 0..spatial_extent[0] {
-                // traverse filter spread at correct position in input
                 let xp = x + k;
                 for l in 0..spatial_extent[1] {
                     let yp = y + l;
+                    for c in 0..spatial_extent[2] {
+                        let ix = (k * spatial_extent[1] + l) * spatial_extent[2] + c;
+                        let iy = i * height + j;
 
-                    // transform k, l to single index -> x_col x coordinate
-                    let ix = k * spatial_extent[0] + l;
-                    // transform i, j to single index -> x_col y coordinate
-                    let iy = i * width + j;
-
-                    x_col[&[ix, iy]] = input_volume[&[xp, yp]];
+                        x_col[&[ix, iy]] = input_volume[&[xp, yp, c]];
+                    }
                 }
             }
         }
     }
+
     x_col
+}
+
+/// Reverse of calc_x_col: accumulate column-format gradients back into spatial volume.
+/// x_col:        [filter_size, out_w * out_h]
+/// padded_shape: [W+2P, H+2P, D]  (padded input dimensions)
+/// Returns d_x:  [W+2P, H+2P, D]
+pub fn col2im<T>(
+    x_col: &Tensor<T>,
+    padded_shape: &[usize],
+    spatial_extent: &[usize],
+    stride: usize,
+    out_w: usize,
+    out_h: usize,
+) -> Tensor<T>
+where
+    T: Float + Sum,
+{
+    let data_size: usize = padded_shape.iter().product();
+    let mut dx = Tensor::new(vec![T::zero(); data_size], padded_shape.to_vec());
+
+    for i in 0..out_w {
+        let x = i * stride;
+        for j in 0..out_h {
+            let y = j * stride;
+            for k in 0..spatial_extent[0] {
+                let xp = x + k;
+                for l in 0..spatial_extent[1] {
+                    let yp = y + l;
+                    for c in 0..spatial_extent[2] {
+                        let ix = (k * spatial_extent[1] + l) * spatial_extent[2] + c;
+                        let iy = i * out_h + j;
+                        dx[&[xp, yp, c]] = dx[&[xp, yp, c]] + x_col[&[ix, iy]];
+                    }
+                }
+            }
+        }
+    }
+
+    dx
 }
 
 #[cfg(test)]
@@ -126,7 +163,7 @@ mod tests {
 
         println!("col_shape: {:?}", col_shape);
 
-        assert_eq!(col_shape, vec![55, 55, 1]);
+        assert_eq!(col_shape, vec![55, 55]);
     }
 
     #[test]

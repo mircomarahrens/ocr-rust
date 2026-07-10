@@ -1,5 +1,27 @@
 # OCR with Rust
 
+## Status
+
+- LeNet-style CNN pipeline is implemented end-to-end (forward, backward, SGD updates).
+- Training loop runs on MNIST grayscale images (28x28x1).
+- Current executable supports configurable epochs, batch size, and learning rate.
+
+## Run Training
+
+```bash
+cargo run --release -- \
+   --train-images data/train-images-idx3-ubyte \
+   --train-labels data/train-labels-idx1-ubyte \
+   --num-epochs 10 \
+   --batch-size 32 \
+   --learning-rate 0.01
+```
+
+Notes:
+
+- CLI flags use kebab-case (for example, `--train-images`, not `--train_images`).
+- Labels are read as single-byte MNIST label values.
+
 ## Prepare data
 
 Download MNIST dataset

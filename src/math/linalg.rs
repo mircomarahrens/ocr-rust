@@ -122,6 +122,60 @@ where
     min_val
 }
 
+/// Compute a^T @ b  where a is [m, k] and b is [m, n] — returns [k, n]
+pub fn matmul_transpose_a<T>(a: &Tensor<T>, b: &Tensor<T>) -> Tensor<T>
+where
+    T: Num + Copy + Add<Output = T> + Mul<Output = T>,
+{
+    assert_eq!(a.shape.len(), 2);
+    assert_eq!(b.shape.len(), 2);
+    assert_eq!(
+        a.shape[0], b.shape[0],
+        "matmul_transpose_a: row count mismatch"
+    );
+
+    let m = a.shape[0];
+    let k = a.shape[1];
+    let n = b.shape[1];
+
+    let mut res = Tensor::new(vec![zero(); k * n], vec![k, n]);
+    for i in 0..k {
+        for j in 0..n {
+            for p in 0..m {
+                res[&[i, j]] = res[&[i, j]] + a[&[p, i]] * b[&[p, j]];
+            }
+        }
+    }
+    res
+}
+
+/// Compute a @ b^T  where a is [m, k] and b is [n, k] — returns [m, n]
+pub fn matmul_transpose_b<T>(a: &Tensor<T>, b: &Tensor<T>) -> Tensor<T>
+where
+    T: Num + Copy + Add<Output = T> + Mul<Output = T>,
+{
+    assert_eq!(a.shape.len(), 2);
+    assert_eq!(b.shape.len(), 2);
+    assert_eq!(
+        a.shape[1], b.shape[1],
+        "matmul_transpose_b: column count mismatch"
+    );
+
+    let m = a.shape[0];
+    let n = b.shape[0];
+    let k = a.shape[1];
+
+    let mut res = Tensor::new(vec![zero(); m * n], vec![m, n]);
+    for i in 0..m {
+        for j in 0..n {
+            for p in 0..k {
+                res[&[i, j]] = res[&[i, j]] + a[&[i, p]] * b[&[j, p]];
+            }
+        }
+    }
+    res
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
