@@ -301,4 +301,35 @@ $ head -c 1584 train-images-idx3-ubyte | od -v -j 800 -A n --endian=big -t u1 --
 13. Dense layer 3: 10 neurons
 14. Output: 1 of 10 classes
 
-### AlexNet
+## Containerization (Podman)
+
+The repository supports building separate runtime images for either the training job or the inference web server from the same multi-stage `Dockerfile`.
+
+### 1. Build Training Image
+```bash
+podman build --target train -t ocr-train .
+```
+
+### 2. Build Server Image
+```bash
+podman build --target server -t ocr-server .
+```
+
+### 3. Run Training in Container
+To run training, mount the directory containing your local MNIST dataset to `/data` in the container.
+*(Note: If using SELinux, append the `:Z` flag to your volume mapping)*:
+```bash
+podman run -v $(pwd)/data:/data:Z ocr-train \
+   --train-images /data/train-images-idx3-ubyte \
+   --train-labels /data/train-labels-idx1-ubyte \
+   --num-train-images 60000 \
+   --num-epochs 15 \
+   --batch-size 64 \
+   --learning-rate 0.02
+```
+
+### 4. Run Inference Server in Container
+To run the server, mount your trained weights folder to `/app/weights` in the container and expose port 3000:
+```bash
+podman run -p 3000:3000 -v $(pwd)/experiments/run_1783808067/weights:/app/weights:Z ocr-server
+```
