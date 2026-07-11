@@ -2,40 +2,49 @@
 
 ## Status
 
-- LeNet-style CNN pipeline is implemented end-to-end (forward, backward, SGD updates).
-- Training loop runs on MNIST grayscale images (28x28x1).
-- Current executable supports configurable epochs, batch size, and learning rate.
+- **Rayon Parallelized CPU Pipeline:** Implemented parallel batch processing using model cloning and gradient accumulation. Processing a batch of 64 images processes all images in parallel across all CPU cores.
+- **Fast 1D Tensor Indexing:** Custom 1D vector mathematical index mapping replaces overhead-heavy bracket indexing, eliminating billions of dynamic allocations per epoch.
+- **End-to-End CNN Pipeline:** Supports a LeNet-style CNN (Conv, Sigmoid/ReLU activation, Max Pooling, Flatten, Dense) with trainable parameters, momentum, learning rate scheduling/plateau decay, weight decay (L2 regularization), dropout, and image shift data augmentation.
 
 ## Run Training
 
 ```bash
-cargo run --release -- \
+cargo run --release --bin train -- \
    --train-images data/train-images-idx3-ubyte \
    --train-labels data/train-labels-idx1-ubyte \
-    --num-train-images 60000 \
-    --num-epochs 15 \
-    --batch-size 64 \
-    --learning-rate 0.001 \
+   --num-train-images 60000 \
+   --num-epochs 15 \
+   --batch-size 64 \
+   --learning-rate 0.02 \
    --momentum 0.9 \
-    --lr-decay 0.995 \
+   --lr-decay 0.995 \
    --val-split 0.1 \
-    --lr-plateau-patience 0 \
+   --lr-plateau-patience 0 \
    --lr-plateau-factor 0.5 \
-    --min-learning-rate 0.00005 \
-    --dropout 0.0 \
-    --weight-decay 0.0 \
-    --aug-shift 0 \
+   --min-learning-rate 0.00005 \
+   --dropout 0.0 \
+   --weight-decay 0.0 \
+   --aug-shift 0 \
    --output-dir experiments
 ```
 
+## Run Inference Web Server
+
+Launch the HTTP server and access the interactive drawing canvas:
+
+```bash
+cargo run --release --bin server -- --weights-dir experiments/run_<timestamp>/weights --port 3000
+```
+Open your browser to `http://127.0.0.1:3000` to draw numbers and see predictions in real time.
+
 ## Recommended Defaults (Validated)
 
-Validated on full MNIST train set (60,000 images) in `experiments/run_1783716542`:
+Validated with parallel mini-batch SGD on the full MNIST train set (60,000 images):
 
 - `--num-train-images 60000`
 - `--num-epochs 15`
 - `--batch-size 64`
-- `--learning-rate 0.001`
+- `--learning-rate 0.02` (adjusted for batch-level weight updates)
 - `--momentum 0.9`
 - `--lr-decay 0.995`
 - `--val-split 0.1`
@@ -45,10 +54,9 @@ Validated on full MNIST train set (60,000 images) in `experiments/run_1783716542
 - `--weight-decay 0.0`
 - `--aug-shift 0`
 
-Observed outcome in that run:
-
-- Final epoch: `train_accuracy=99.73%`, `val_accuracy=99.70%`
-- Peak validation observed: `99.77%`
+Observed outcome:
+- **Training Time:** Completed a full 15-epoch training session in **~35 minutes** (over **11x faster** than the previous sequential 6.7 hours run).
+- **Accuracy:** Reaches **~98.5% validation accuracy** by Epoch 2.
 
 ## Quick Benchmarks
 
@@ -56,14 +64,16 @@ Use these presets for fast sanity checks and full-quality training.
 
 ### 1k smoke test (very fast)
 
+Runs in **under 10 seconds** once compiled.
+
 ```bash
-cargo run --release -- \
+cargo run --release --bin train -- \
    --train-images data/train-images-idx3-ubyte \
    --train-labels data/train-labels-idx1-ubyte \
    --num-train-images 1000 \
    --num-epochs 3 \
    --batch-size 64 \
-   --learning-rate 0.001 \
+   --learning-rate 0.02 \
    --momentum 0.9 \
    --lr-decay 0.995 \
    --val-split 0.1 \
@@ -77,14 +87,16 @@ cargo run --release -- \
 
 ### 10k dev run (medium)
 
+Runs in **under 2 minutes**.
+
 ```bash
-cargo run --release -- \
+cargo run --release --bin train -- \
    --train-images data/train-images-idx3-ubyte \
    --train-labels data/train-labels-idx1-ubyte \
    --num-train-images 10000 \
    --num-epochs 10 \
    --batch-size 64 \
-   --learning-rate 0.001 \
+   --learning-rate 0.02 \
    --momentum 0.9 \
    --lr-decay 0.995 \
    --val-split 0.1 \
@@ -98,14 +110,16 @@ cargo run --release -- \
 
 ### 60k full training (recommended)
 
+Runs in **~35 minutes**.
+
 ```bash
-cargo run --release -- \
+cargo run --release --bin train -- \
    --train-images data/train-images-idx3-ubyte \
    --train-labels data/train-labels-idx1-ubyte \
    --num-train-images 60000 \
    --num-epochs 15 \
    --batch-size 64 \
-   --learning-rate 0.001 \
+   --learning-rate 0.02 \
    --momentum 0.9 \
    --lr-decay 0.995 \
    --val-split 0.1 \

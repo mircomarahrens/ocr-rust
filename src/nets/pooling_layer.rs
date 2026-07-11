@@ -1,12 +1,12 @@
 use crate::nets::layers::Layer;
 
-use crate::math::linalg::mul_vals;
 use num::traits::{Float, FromPrimitive};
 use std::iter::Sum;
 
 use crate::math::tensor::Tensor;
 
 /// Pooling layer for a neural network.
+#[derive(Clone, Debug)]
 pub struct PoolingLayer {
     spatial_extent: Vec<usize>, // Spatial extent of the pooling layer, F
     stride: usize,              // Stride for the pooling layer, S
@@ -35,18 +35,22 @@ where
 
         let f_w = self.spatial_extent[0];
         let f_h = self.spatial_extent[1];
-        let d = input_volume.shape()[2];
+        let input_shape = input_volume.shape();
+        let in_h = input_shape[1];
+        let in_d = input_shape[2];
+        let d = in_d;
 
-        let w_2 = (input_volume.shape()[0] - f_w) / self.stride + 1;
-        let h_2 = (input_volume.shape()[1] - f_h) / self.stride + 1;
+        let w_2 = (input_shape[0] - f_w) / self.stride + 1;
+        let h_2 = (input_shape[1] - f_h) / self.stride + 1;
 
         let output_shape = vec![w_2, h_2, d];
-        let data_size = mul_vals(&output_shape);
-        let data = vec![T::zero(); data_size];
-        let mut output_volume = Tensor::new(data, output_shape);
+        let data_size = w_2 * h_2 * d;
+        let mut output_data = vec![T::zero(); data_size];
 
         let number_of_regions = w_2 * h_2;
         self.argmax_cache = vec![(0, 0); number_of_regions * d];
+
+        let input_data = input_volume.get_data();
 
         for idx in 0..number_of_regions {
             let w_out = idx / h_2;
@@ -65,7 +69,7 @@ where
                         let w_in = w_start + fw;
                         let h_in = h_start + fh;
 
-                        let value = input_volume[&[w_in, h_in, depth]];
+                        let value = input_data[w_in * in_h * in_d + h_in * in_d + depth];
                         if value > max_value {
                             max_value = value;
                             max_w = w_in;
@@ -74,22 +78,27 @@ where
                     }
                 }
 
-                output_volume[&[w_out, h_out, depth]] = max_value;
+                output_data[w_out * h_2 * d + h_out * d + depth] = max_value;
                 self.argmax_cache[idx * d + depth] = (max_w, max_h);
             }
         }
 
-        output_volume
+        Tensor::new(output_data, output_shape)
     }
 
     fn backward(&mut self, d_out: &mut Tensor<T>) -> Tensor<T> {
         let input_shape = self.input_shape_cache.clone();
         let data_size: usize = input_shape.iter().product();
-        let mut d_input = Tensor::new(vec![T::zero(); data_size], input_shape);
+        let mut d_input_data = vec![T::zero(); data_size];
 
-        let d = d_out.shape()[2];
-        let w_2 = d_out.shape()[0];
-        let h_2 = d_out.shape()[1];
+        let in_h = input_shape[1];
+        let in_d = input_shape[2];
+
+        let d_out_data = d_out.get_data();
+        let d_out_shape = d_out.shape();
+        let w_2 = d_out_shape[0];
+        let h_2 = d_out_shape[1];
+        let d = d_out_shape[2];
 
         for idx in 0..(w_2 * h_2) {
             let w_out = idx / h_2;
@@ -97,18 +106,20 @@ where
 
             for depth in 0..d {
                 let (w_in, h_in) = self.argmax_cache[idx * d + depth];
-                d_input[&[w_in, h_in, depth]] =
-                    d_input[&[w_in, h_in, depth]] + d_out[&[w_out, h_out, depth]];
+                let d_input_idx = w_in * in_h * in_d + h_in * in_d + depth;
+                let d_out_idx = w_out * h_2 * d + h_out * d + depth;
+                d_input_data[d_input_idx] = d_input_data[d_input_idx] + d_out_data[d_out_idx];
             }
         }
 
-        d_input
+        Tensor::new(d_input_data, input_shape)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::math::linalg::mul_vals;
 
     #[test]
     fn test_forward() {

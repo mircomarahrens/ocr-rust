@@ -46,17 +46,24 @@ where
 
     assert_eq!(a.shape[1], b.shape[0]);
 
-    // initialize result vector
-    let mut res = Tensor::new(vec![zero(); a_rows * b_cols], vec![a_rows, b_cols]);
+    let a_data = a.get_data();
+    let b_data = b.get_data();
+    let mut res_data = vec![zero(); a_rows * b_cols];
 
     for i in 0..a_rows {
+        let row_offset = i * a_cols;
+        let a_row = &a_data[row_offset..row_offset + a_cols];
+        let res_row_offset = i * b_cols;
         for j in 0..b_cols {
+            let mut sum = zero();
             for k in 0..a_cols {
-                res[&[i, j]] = res[&[i, j]] + a[&[i, k]] * b[&[k, j]];
+                sum = sum + a_row[k] * b_data[k * b_cols + j];
             }
+            res_data[res_row_offset + j] = sum;
         }
     }
-    res
+
+    Tensor::new(res_data, vec![a_rows, b_cols])
 }
 
 /// Function to compute the magnitude of a vector
@@ -147,15 +154,22 @@ where
     let k = a.shape[1];
     let n = b.shape[1];
 
-    let mut res = Tensor::new(vec![zero(); k * n], vec![k, n]);
+    let a_data = a.get_data();
+    let b_data = b.get_data();
+    let mut res_data = vec![zero(); k * n];
+
     for i in 0..k {
+        let res_row_offset = i * n;
         for j in 0..n {
+            let mut sum = zero();
             for p in 0..m {
-                res[&[i, j]] = res[&[i, j]] + a[&[p, i]] * b[&[p, j]];
+                sum = sum + a_data[p * k + i] * b_data[p * n + j];
             }
+            res_data[res_row_offset + j] = sum;
         }
     }
-    res
+
+    Tensor::new(res_data, vec![k, n])
 }
 
 /// Compute a @ b^T  where a is [m, k] and b is [n, k] — returns [m, n]
@@ -174,15 +188,26 @@ where
     let n = b.shape[0];
     let k = a.shape[1];
 
-    let mut res = Tensor::new(vec![zero(); m * n], vec![m, n]);
+    let a_data = a.get_data();
+    let b_data = b.get_data();
+    let mut res_data = vec![zero(); m * n];
+
     for i in 0..m {
+        let a_row_offset = i * k;
+        let a_row = &a_data[a_row_offset..a_row_offset + k];
+        let res_row_offset = i * n;
         for j in 0..n {
+            let b_row_offset = j * k;
+            let b_row = &b_data[b_row_offset..b_row_offset + k];
+            let mut sum = zero();
             for p in 0..k {
-                res[&[i, j]] = res[&[i, j]] + a[&[i, p]] * b[&[j, p]];
+                sum = sum + a_row[p] * b_row[p];
             }
+            res_data[res_row_offset + j] = sum;
         }
     }
-    res
+
+    Tensor::new(res_data, vec![m, n])
 }
 
 #[cfg(test)]

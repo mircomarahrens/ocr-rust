@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MNIST Digit Classifier</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #0f111a;
+            --card-color: #1a1d2e;
+            --accent-color: #3b82f6;
+            --accent-glow: rgba(59, 130, 246, 0.4);
+            --text-color: #f1f5f9;
+            --text-muted: #94a3b8;
+            --glow-green: #10b981;
+            --glow-green-bg: rgba(16, 185, 129, 0.2);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Outfit', sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            padding: 20px;
+            overflow-x: hidden;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        header h1 {
+            font-size: 2.5rem;
+            font-weight: 800;
+            background: linear-gradient(135deg, #60a5fa, #3b82f6);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 5px;
+        }
+
+        header p {
+            color: var(--text-muted);
+            font-size: 1.1rem;
+        }
+
+        .container {
+            display: flex;
+            gap: 40px;
+            background: var(--card-color);
+            padding: 30px;
+            border-radius: 24px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4), 
+                        inset 0 1px 0 rgba(255, 255, 255, 0.1);
+            max-width: 900px;
+            width: 100%;
+            align-items: stretch;
+            flex-wrap: wrap;
+        }
+
+        .canvas-section {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 20px;
+            flex: 1;
+            min-width: 280px;
+        }
+
+        canvas {
+            background-color: #000000;
+            border: 2px solid #2e354f;
+            border-radius: 16px;
+            cursor: crosshair;
+            box-shadow: 0 8px 16px rgba(0, 0, 0, 0.3);
+            touch-action: none;
+        }
+
+        .btn-group {
+            display: flex;
+            gap: 15px;
+            width: 100%;
+            justify-content: center;
+        }
+
+        button {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 12px;
+            font-family: inherit;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .btn-clear {
+            background-color: #ef4444;
+            color: white;
+        }
+
+        .btn-clear:hover {
+            background-color: #dc2626;
+            transform: translateY(-2px);
+        }
+
+        .btn-predict {
+            background-color: var(--accent-color);
+            color: white;
+            box-shadow: 0 0 15px var(--accent-glow);
+        }
+
+        .btn-predict:hover {
+            background-color: #2563eb;
+            box-shadow: 0 0 25px var(--accent-glow);
+            transform: translateY(-2px);
+        }
+
+        .checkbox-container {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+
+        .results-section {
+            flex: 1;
+            min-width: 320px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .prediction-header {
+            background: rgba(255, 255, 255, 0.05);
+            padding: 20px;
+            border-radius: 16px;
+            text-align: center;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            height: 140px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .prediction-header .label {
+            font-size: 0.9rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 5px;
+        }
+
+        .prediction-header .value {
+            font-size: 4rem;
+            font-weight: 800;
+            color: var(--glow-green);
+            text-shadow: 0 0 20px var(--glow-green-bg);
+            line-height: 1;
+        }
+
+        .prediction-header .confidence {
+            font-size: 0.95rem;
+            color: var(--text-muted);
+            margin-top: 5px;
+        }
+
+        .bars-container {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .bar-row {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .bar-label {
+            font-size: 1.1rem;
+            font-weight: 600;
+            width: 15px;
+            text-align: right;
+        }
+
+        .bar-outer {
+            flex: 1;
+            height: 14px;
+            background-color: rgba(255, 255, 255, 0.08);
+            border-radius: 7px;
+            overflow: hidden;
+        }
+
+        .bar-inner {
+            height: 100%;
+            width: 0%;
+            background-color: var(--accent-color);
+            border-radius: 7px;
+            transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .bar-row.active .bar-inner {
+            background-color: var(--glow-green);
+            box-shadow: 0 0 10px var(--glow-green-bg);
+        }
+
+        .bar-row.active .bar-label {
+            color: var(--glow-green);
+        }
+
+        .bar-value {
+            font-size: 0.9rem;
+            width: 45px;
+            text-align: left;
+            color: var(--text-muted);
+        }
+
+        .bar-row.active .bar-value {
+            color: var(--glow-green);
+            font-weight: 600;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>MNIST Digit Classifier</h1>
+        <p>LeNet-5 CNN Inference Server in Rust</p>
+    </header>
+
+    <div class="container">
+        <div class="canvas-section">
+            <canvas id="canvas" width="280" height="280"></canvas>
+            <div class="checkbox-container">
+                <input type="checkbox" id="auto-predict" checked>
+                <label for="auto-predict">Auto-classify on stroke end</label>
+            </div>
+            <div class="btn-group">
+                <button class="btn-clear" id="clear-btn">Clear Canvas</button>
+                <button class="btn-predict" id="predict-btn">Predict</button>
+            </div>
+        </div>
+
+        <div class="results-section">
+            <div class="prediction-header">
+                <div class="label">Predicted Digit</div>
+                <div class="value" id="pred-val">-</div>
+                <div class="confidence" id="pred-conf">Draw a number on the canvas</div>
+            </div>
+
+            <div class="bars-container">
+                <!-- Bars will be generated dynamically -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const clearBtn = document.getElementById('clear-btn');
+        const predictBtn = document.getElementById('predict-btn');
+        const autoPredictCheck = document.getElementById('auto-predict');
+        const predVal = document.getElementById('pred-val');
+        const predConf = document.getElementById('pred-conf');
+        const barsContainer = document.querySelector('.bars-container');
+
+        // Draw setup
+        ctx.strokeStyle = '#FFFFFF';
+        ctx.lineWidth = 20;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+
+        let isDrawing = false;
+        let lastX = 0;
+        let lastY = 0;
+
+        // Initialize probability bars
+        const barRows = [];
+        for (let i = 0; i < 10; i++) {
+            const row = document.createElement('div');
+            row.className = 'bar-row';
+            row.innerHTML = `
+                <div class="bar-label">${i}</div>
+                <div class="bar-outer">
+                    <div class="bar-inner" id="bar-inner-${i}"></div>
+                </div>
+                <div class="bar-value" id="bar-val-${i}">0%</div>
+            `;
+            barsContainer.appendChild(row);
+            barRows.push(row);
+        }
+
+        // Draw event listeners
+        canvas.addEventListener('mousedown', startDrawing);
+        canvas.addEventListener('mousemove', draw);
+        canvas.addEventListener('mouseup', stopDrawing);
+        canvas.addEventListener('mouseout', stopDrawing);
+
+        canvas.addEventListener('touchstart', (e) => {
+            const touch = e.touches[0];
+            const rect = canvas.getBoundingClientRect();
+            startDrawing({ clientX: touch.clientX, clientY: touch.clientY });
+            e.preventDefault();
+        });
+        canvas.addEventListener('touchmove', (e) => {
+            const touch = e.touches[0];
+            const rect = canvas.getBoundingClientRect();
+            draw({ clientX: touch.clientX, clientY: touch.clientY });
+            e.preventDefault();
+        });
+        canvas.addEventListener('touchend', () => {
+            stopDrawing();
+        });
+
+        function startDrawing(e) {
+            isDrawing = true;
+            const rect = canvas.getBoundingClientRect();
+            lastX = e.clientX - rect.left;
+            lastY = e.clientY - rect.top;
+        }
+
+        function draw(e) {
+            if (!isDrawing) return;
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+
+            ctx.beginPath();
+            ctx.moveTo(lastX, lastY);
+            ctx.lineTo(x, y);
+            ctx.stroke();
+
+            lastX = x;
+            lastY = y;
+        }
+
+        function stopDrawing() {
+            if (!isDrawing) return;
+            isDrawing = false;
+            if (autoPredictCheck.checked) {
+                sendPrediction();
+            }
+        }
+
+        // Clear canvas
+        clearBtn.addEventListener('click', () => {
+            ctx.fillStyle = '#000000';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            predVal.innerText = '-';
+            predConf.innerText = 'Draw a number on the canvas';
+            barRows.forEach((row, i) => {
+                row.classList.remove('active');
+                document.getElementById(`bar-inner-${i}`).style.width = '0%';
+                document.getElementById(`bar-val-${i}`).innerText = '0%';
+            });
+        });
+
+        // Predict button
+        predictBtn.addEventListener('click', sendPrediction);
+
+        // Fill initial canvas with black
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        async function sendPrediction() {
+            // Check if canvas is entirely empty (has only black pixels)
+            const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            let hasDrawing = false;
+            for (let i = 0; i < imgData.data.length; i += 4) {
+                if (imgData.data[i] > 0 || imgData.data[i+1] > 0 || imgData.data[i+2] > 0) {
+                    hasDrawing = true;
+                    break;
+                }
+            }
+
+            if (!hasDrawing) {
+                return;
+            }
+
+            // Export to base64 PNG
+            const base64Image = canvas.toDataURL('image/png');
+
+            try {
+                const response = await fetch('/predict', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ image: base64Image })
+                });
+
+                if (!response.ok) {
+                    throw new Error(await response.text());
+                }
+
+                const data = await response.json();
+                
+                // Update header prediction
+                predVal.innerText = data.prediction;
+                predConf.innerText = `Confidence: ${(data.confidence * 100).toFixed(2)}%`;
+
+                // Update bar percentages
+                data.probabilities.forEach((prob, i) => {
+                    const pct = (prob * 100).toFixed(0);
+                    document.getElementById(`bar-inner-${i}`).style.width = `${pct}%`;
+                    document.getElementById(`bar-val-${i}`).innerText = `${pct}%`;
+                    
+                    if (i === data.prediction) {
+                        barRows[i].classList.add('active');
+                    } else {
+                        barRows[i].classList.remove('active');
+                    }
+                });
+
+            } catch (err) {
+                console.error("Prediction error:", err);
+                predConf.innerText = `Error: ${err.message}`;
+            }
+        }
+    </script>
+</body>
+</html>

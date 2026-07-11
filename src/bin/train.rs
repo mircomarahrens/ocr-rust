@@ -3,25 +3,14 @@ use rand::seq::SliceRandom;
 use rand::Rng;
 use rocr::data::idx::{Idx1, Idx3};
 use rocr::math::loss::{CrossEntropyLoss, Softmax};
-use rocr::math::optimizer::SGD;
 use rocr::math::tensor::Tensor;
-use rocr::nets::convolutional_layer::{Activation as ConvActivation, ConvolutionalLayer};
-use rocr::nets::dense_layer::{Activation as DenseActivation, DenseLayer};
-use rocr::nets::flatten_layer::FlattenLayer;
-use rocr::nets::layers::Layer;
-use rocr::nets::pooling_layer::PoolingLayer;
+use rocr::nets::lenet::{
+    LeNet, LeNetOptimizers, MNIST_MEAN, MNIST_STD,
+};
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufReader, Write};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
-
-const MNIST_MEAN: f32 = 0.1307;
-const MNIST_STD: f32 = 0.3081;
-const MODEL_CONV1_FILTERS: usize = 16;
-const MODEL_CONV2_FILTERS: usize = 32;
-const MODEL_FLATTEN_SIZE: usize = 5 * 5 * MODEL_CONV2_FILTERS;
-const MODEL_DENSE1_SIZE: usize = 256;
-const MODEL_DENSE2_SIZE: usize = 128;
 
 #[derive(Parser)]
 struct Args {
@@ -60,55 +49,6 @@ struct Args {
     output_dir: PathBuf,
 }
 
-struct LeNetOptimizers {
-    conv1: SGD<f32>,
-    conv2: SGD<f32>,
-    dense1: SGD<f32>,
-    dense2: SGD<f32>,
-    dense3: SGD<f32>,
-}
-
-impl LeNetOptimizers {
-    fn new(learning_rate: f32, momentum: Option<f32>, weight_decay: f32) -> Self {
-        fn make_sgd(learning_rate: f32, momentum: Option<f32>, weight_decay: f32) -> SGD<f32> {
-            let mut sgd = if let Some(m) = momentum {
-                SGD::with_momentum(learning_rate, m)
-            } else {
-                SGD::new(learning_rate)
-            };
-            sgd.weight_decay = weight_decay;
-            sgd
-        }
-
-        LeNetOptimizers {
-            conv1: make_sgd(learning_rate, momentum, weight_decay),
-            conv2: make_sgd(learning_rate, momentum, weight_decay),
-            dense1: make_sgd(learning_rate, momentum, weight_decay),
-            dense2: make_sgd(learning_rate, momentum, weight_decay),
-            dense3: make_sgd(learning_rate, momentum, weight_decay),
-        }
-    }
-
-    fn set_learning_rate(&mut self, learning_rate: f32) {
-        self.conv1.learning_rate = learning_rate;
-        self.conv2.learning_rate = learning_rate;
-        self.dense1.learning_rate = learning_rate;
-        self.dense2.learning_rate = learning_rate;
-        self.dense3.learning_rate = learning_rate;
-    }
-}
-
-struct LeNet {
-    conv1: ConvolutionalLayer<f32>,
-    pool1: PoolingLayer,
-    conv2: ConvolutionalLayer<f32>,
-    pool2: PoolingLayer,
-    flatten: FlattenLayer,
-    dense1: DenseLayer<f32>,
-    dense2: DenseLayer<f32>,
-    dense3: DenseLayer<f32>,
-}
-
 fn argmax_1d(tensor: &Tensor<f32>) -> usize {
     let mut max_idx = 0usize;
     let mut max_val = tensor[&[0]];
@@ -119,166 +59,6 @@ fn argmax_1d(tensor: &Tensor<f32>) -> usize {
         }
     }
     max_idx
-}
-
-impl LeNet {
-    fn new() -> Self {
-        LeNet {
-            conv1: ConvolutionalLayer::with_activation(
-                MODEL_CONV1_FILTERS,
-                vec![3, 3, 1],
-                1,
-                1,
-                ConvActivation::Relu,
-            ),
-            pool1: PoolingLayer::new(vec![2, 2], 2),
-            conv2: ConvolutionalLayer::with_activation(
-                MODEL_CONV2_FILTERS,
-                vec![5, 5, MODEL_CONV1_FILTERS],
-                1,
-                0,
-                ConvActivation::Relu,
-            ),
-            pool2: PoolingLayer::new(vec![2, 2], 2),
-            flatten: FlattenLayer::new(),
-            dense1: DenseLayer::with_activation(
-                MODEL_FLATTEN_SIZE,
-                MODEL_DENSE1_SIZE,
-                DenseActivation::Relu,
-            ),
-            dense2: DenseLayer::with_activation(
-                MODEL_DENSE1_SIZE,
-                MODEL_DENSE2_SIZE,
-                DenseActivation::Relu,
-            ),
-            dense3: DenseLayer::new(MODEL_DENSE2_SIZE, 10),
-        }
-    }
-
-    fn new_with_dropout(dropout_rate: f32) -> Self {
-        let rate = if dropout_rate > 0.0 {
-            Some(dropout_rate)
-        } else {
-            None
-        };
-        let mut lenet = Self::new();
-        if let Some(r) = rate {
-            lenet.dense1 = DenseLayer::with_dropout(
-                MODEL_FLATTEN_SIZE,
-                MODEL_DENSE1_SIZE,
-                DenseActivation::Relu,
-                r,
-            );
-            lenet.dense2 = DenseLayer::with_dropout(
-                MODEL_DENSE1_SIZE,
-                MODEL_DENSE2_SIZE,
-                DenseActivation::Relu,
-                r,
-            );
-        }
-        lenet
-    }
-
-    fn set_training(&mut self, training: bool) {
-        self.dense1.set_training(training);
-        self.dense2.set_training(training);
-        self.dense3.set_training(training);
-    }
-
-    fn forward(&mut self, input: &mut Tensor<f32>) -> Tensor<f32> {
-        let c1 = self.conv1.forward(input);
-        let mut p1_in = c1;
-        let p1 = self.pool1.forward(&mut p1_in);
-        let mut c2_in = p1;
-        let c2 = self.conv2.forward(&mut c2_in);
-        let mut p2_in = c2;
-        let p2 = self.pool2.forward(&mut p2_in);
-        let mut f_in = p2;
-        let f = self.flatten.forward(&mut f_in);
-        let mut d1_in = f;
-        let d1 = self.dense1.forward(&mut d1_in);
-        let mut d2_in = d1;
-        let d2 = self.dense2.forward(&mut d2_in);
-        let mut d3_in = d2;
-        self.dense3.forward(&mut d3_in)
-    }
-
-    fn backward(&mut self, mut d_out: Tensor<f32>) -> Tensor<f32> {
-        let mut d_d3 = self.dense3.backward(&mut d_out);
-        let mut d_d2 = self.dense2.backward(&mut d_d3);
-        let mut d_d1 = self.dense1.backward(&mut d_d2);
-        let mut d_f = self.flatten.backward(&mut d_d1);
-        let mut d_p2 = self.pool2.backward(&mut d_f);
-        let mut d_c2 = self.conv2.backward(&mut d_p2);
-        let mut d_p1 = self.pool1.backward(&mut d_c2);
-        self.conv1.backward(&mut d_p1)
-    }
-
-    fn update_weights(&mut self, optimizers: &mut LeNetOptimizers) {
-        optimizers
-            .dense3
-            .update_weights(&mut self.dense3.weights, &self.dense3.d_weights);
-        optimizers
-            .dense3
-            .update_bias(&mut self.dense3.bias, &self.dense3.d_bias);
-
-        optimizers
-            .dense2
-            .update_weights(&mut self.dense2.weights, &self.dense2.d_weights);
-        optimizers
-            .dense2
-            .update_bias(&mut self.dense2.bias, &self.dense2.d_bias);
-
-        optimizers
-            .dense1
-            .update_weights(&mut self.dense1.weights, &self.dense1.d_weights);
-        optimizers
-            .dense1
-            .update_bias(&mut self.dense1.bias, &self.dense1.d_bias);
-
-        optimizers
-            .conv2
-            .update_weights(&mut self.conv2.weights, &self.conv2.d_weights);
-        optimizers
-            .conv2
-            .update_bias(&mut self.conv2.bias, &self.conv2.d_bias);
-
-        optimizers
-            .conv1
-            .update_weights(&mut self.conv1.weights, &self.conv1.d_weights);
-        optimizers
-            .conv1
-            .update_bias(&mut self.conv1.bias, &self.conv1.d_bias);
-    }
-
-    fn save_weights(&self, dir: &PathBuf) -> std::io::Result<()> {
-        save_tensor(dir, "conv1_weights", &self.conv1.weights)?;
-        save_tensor(dir, "conv1_bias", &self.conv1.bias)?;
-
-        save_tensor(dir, "conv2_weights", &self.conv2.weights)?;
-        save_tensor(dir, "conv2_bias", &self.conv2.bias)?;
-
-        save_tensor(dir, "dense1_weights", &self.dense1.weights)?;
-        save_tensor(dir, "dense1_bias", &self.dense1.bias)?;
-
-        save_tensor(dir, "dense2_weights", &self.dense2.weights)?;
-        save_tensor(dir, "dense2_bias", &self.dense2.bias)?;
-
-        save_tensor(dir, "dense3_weights", &self.dense3.weights)?;
-        save_tensor(dir, "dense3_bias", &self.dense3.bias)?;
-
-        Ok(())
-    }
-}
-
-fn save_tensor(dir: &PathBuf, name: &str, tensor: &Tensor<f32>) -> std::io::Result<()> {
-    let file_path = dir.join(format!("{}.txt", name));
-    let mut file = File::create(file_path)?;
-    writeln!(file, "shape={:?}", tensor.shape())?;
-    for value in tensor.get_data() {
-        writeln!(file, "{:.8}", value)?;
-    }
-    Ok(())
 }
 
 fn normalized_image_tensor(all_images: &[u8], data_idx: usize, image_size: usize) -> Tensor<f32> {
@@ -295,9 +75,6 @@ fn normalized_image_tensor(all_images: &[u8], data_idx: usize, image_size: usize
     Tensor::new(img_normalized, vec![28, 28, 1])
 }
 
-/// Returns a normalized 28×28×1 tensor with a random pixel-level integer shift applied.
-/// Pixels shifted outside the image boundary are filled with the background value
-/// (MNIST background ≈ 0, which after normalization equals `(0.0 - MNIST_MEAN) / MNIST_STD`).
 fn augmented_image_tensor(
     all_images: &[u8],
     data_idx: usize,
@@ -483,58 +260,68 @@ fn main() -> std::io::Result<()> {
 
         let num_batches = train_samples.div_ceil(args.batch_size);
         for batch_idx in 0..num_batches {
+            let batch_start = batch_idx * args.batch_size;
+            let batch_end = (batch_start + args.batch_size).min(train_samples);
+            let current_batch_size = batch_end - batch_start;
+
+            if current_batch_size == 0 {
+                continue;
+            }
+
+            use rayon::prelude::*;
+            // Process the batch in parallel
+            let batch_results: Vec<(f32, usize, LeNet)> = (batch_start..batch_end)
+                .into_par_iter()
+                .map(|actual_idx| {
+                    let data_idx = train_indices[actual_idx];
+                    let mut image = if args.aug_shift > 0 {
+                        augmented_image_tensor(&all_images, data_idx, image_size, args.aug_shift)
+                    } else {
+                        normalized_image_tensor(&all_images, data_idx, image_size)
+                    };
+                    let label_val = all_labels[data_idx];
+                    let target = one_hot_target(label_val, 10);
+
+                    // We clone the model to have thread-local weights & forward/backward state
+                    let mut local_model = model.clone();
+
+                    let logits = local_model.forward(&mut image);
+                    let predictions = Softmax::forward(&logits);
+                    let loss = CrossEntropyLoss::forward(&predictions, &target);
+
+                    let max_idx = argmax_1d(&predictions);
+                    let correct = if max_idx == label_val { 1 } else { 0 };
+
+                    let d_out = CrossEntropyLoss::backward(&predictions, &target);
+                    let _d_input = local_model.backward(d_out);
+
+                    (loss, correct, local_model)
+                })
+                .collect();
+
+            // Accumulate metrics and model gradients sequentially
             let mut batch_loss = 0.0f32;
             let mut batch_correct = 0;
-            let mut batch_sample_count = 0;
+            let mut local_models = Vec::with_capacity(current_batch_size);
 
-            for sample_idx in 0..args.batch_size {
-                let actual_idx = batch_idx * args.batch_size + sample_idx;
-                if actual_idx >= train_samples {
-                    break;
-                }
-
-                let data_idx = train_indices[actual_idx];
-
-                let mut image = if args.aug_shift > 0 {
-                    augmented_image_tensor(&all_images, data_idx, image_size, args.aug_shift)
-                } else {
-                    normalized_image_tensor(&all_images, data_idx, image_size)
-                };
-
-                let label_val = all_labels[data_idx];
-
-                // Create one-hot target
-                let target = one_hot_target(label_val, 10);
-
-                // Forward pass
-                let logits = model.forward(&mut image);
-                let predictions = Softmax::forward(&logits);
-
-                // Compute loss
-                let loss = CrossEntropyLoss::forward(&predictions, &target);
+            for (loss, correct, local_model) in batch_results {
                 batch_loss += loss;
-
-                // Get prediction accuracy
-                let max_idx = argmax_1d(&predictions);
-                if max_idx == label_val {
-                    batch_correct += 1;
-                }
-
-                // Backward pass
-                let d_out = CrossEntropyLoss::backward(&predictions, &target);
-                let _d_input = model.backward(d_out);
-
-                // Update weights
-                model.update_weights(&mut optimizers);
-                batch_sample_count += 1;
+                batch_correct += correct;
+                local_models.push(local_model);
             }
+
+            // Accumulate all local gradients into the main model and average them
+            model.accumulate_gradients(&local_models);
+
+            // Update the main weights once per batch!
+            model.update_weights(&mut optimizers);
 
             train_total_loss += batch_loss;
             train_correct += batch_correct;
-            train_total_samples += batch_sample_count;
+            train_total_samples += current_batch_size;
 
-            if batch_sample_count > 0 && (batch_idx + 1) % 5 == 0 {
-                let avg_batch_loss = batch_loss / (batch_sample_count as f32);
+            if current_batch_size > 0 && (batch_idx + 1) % 5 == 0 {
+                let avg_batch_loss = batch_loss / (current_batch_size as f32);
                 println!("  Batch {}: Loss = {:.6}", batch_idx + 1, avg_batch_loss);
             }
         }

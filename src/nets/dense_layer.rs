@@ -5,7 +5,7 @@ use num::traits::{Float, FromPrimitive};
 use rand::distributions::{Distribution, Standard};
 use std::iter::Sum;
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub enum Activation {
     Sigmoid,
     Relu,
@@ -44,6 +44,7 @@ fn activation_derivative<T: Float>(cached_output: T, act: Activation) -> T {
 }
 
 /// Dense (fully-connected) layer
+#[derive(Clone, Debug)]
 pub struct DenseLayer<T>
 where
     T: Float + FromPrimitive,
@@ -116,7 +117,7 @@ where
 
 impl<T> Layer<T> for DenseLayer<T>
 where
-    T: Float + Sum + FromPrimitive,
+    T: Float + Sum + FromPrimitive + Send + Sync,
     Standard: Distribution<T>,
 {
     fn forward(&mut self, input_volume: &mut Tensor<T>) -> Tensor<T> {
@@ -135,22 +136,26 @@ where
 
         self.cached_input = Some(input_volume.clone());
 
-        // y = W @ x + b  [out_size] = [out_size, in_size] @ [in_size]
-        let mut output = Tensor::new(vec![T::zero(); self.out_size], vec![self.out_size]);
-        for i in 0..self.out_size {
-            let mut sum = self.bias[&[i]];
-            for j in 0..self.in_size {
-                sum = sum + self.weights[&[i, j]] * input_volume[&[j]];
-            }
-            output[&[i]] = sum;
-        }
+        let weights_data = self.weights.get_data();
+        let input_data = input_volume.get_data();
+        let bias_data = self.bias.get_data();
 
-        // apply activation if configured
-        if let Some(act) = self.activation {
-            for i in 0..self.out_size {
-                output[&[i]] = apply_activation(output[&[i]], act);
-            }
-        }
+        use rayon::prelude::*;
+        let mut output_data: Vec<T> = (0..self.out_size)
+            .into_par_iter()
+            .map(|i| {
+                let row_offset = i * self.in_size;
+                let w_row = &weights_data[row_offset..row_offset + self.in_size];
+                let mut sum = bias_data[i];
+                for j in 0..self.in_size {
+                    sum = sum + w_row[j] * input_data[j];
+                }
+                if let Some(act) = self.activation {
+                    sum = apply_activation(sum, act);
+                }
+                sum
+            })
+            .collect();
 
         // Inverted dropout: applied after activation, only in training mode.
         if self.training {
@@ -164,14 +169,15 @@ where
                     .collect();
                 for i in 0..self.out_size {
                     if !self.dropout_mask[i] {
-                        output[&[i]] = T::zero();
+                        output_data[i] = T::zero();
                     } else {
-                        output[&[i]] = output[&[i]] * scale;
+                        output_data[i] = output_data[i] * scale;
                     }
                 }
             }
         }
 
+        let output = Tensor::new(output_data, vec![self.out_size]);
         self.cached_output = Some(output.clone());
         output
     }
@@ -180,23 +186,19 @@ where
         let input = self
             .cached_input
             .as_ref()
-            .expect("backward called before forward")
-            .clone();
+            .expect("backward called before forward");
         let output_cache = self
             .cached_output
             .as_ref()
-            .expect("backward called before forward")
-            .clone();
+            .expect("backward called before forward");
 
-        // Step 1: activation backward — apply derivative
-        let mut d_z = Tensor::new(vec![T::zero(); self.out_size], vec![self.out_size]);
+        let mut d_z_data = d_out.get_data().clone();
         if let Some(act) = self.activation {
+            let cached_out_data = output_cache.get_data();
             for i in 0..self.out_size {
-                let deriv = activation_derivative(output_cache[&[i]], act);
-                d_z[&[i]] = d_out[&[i]] * deriv;
+                let deriv = activation_derivative(cached_out_data[i], act);
+                d_z_data[i] = d_z_data[i] * deriv;
             }
-        } else {
-            d_z = d_out.clone();
         }
 
         // Apply dropout mask to d_z so dropped units receive zero gradient.
@@ -208,36 +210,45 @@ where
             };
             for i in 0..self.out_size {
                 if !self.dropout_mask[i] {
-                    d_z[&[i]] = T::zero();
+                    d_z_data[i] = T::zero();
                 } else {
-                    d_z[&[i]] = d_z[&[i]] * scale;
+                    d_z_data[i] = d_z_data[i] * scale;
                 }
             }
         }
 
         // Step 2: dW = d_z @ x^T  [out_size, in_size]
-        for i in 0..self.out_size {
-            for j in 0..self.in_size {
-                self.d_weights[&[i, j]] = d_z[&[i]] * input[&[j]];
-            }
-        }
+        let input_data = input.get_data();
+        let d_weights_data = self.d_weights.get_data_mut();
+
+        use rayon::prelude::*;
+        d_weights_data
+            .par_chunks_exact_mut(self.in_size)
+            .enumerate()
+            .for_each(|(i, row)| {
+                let dz = d_z_data[i];
+                for j in 0..self.in_size {
+                    row[j] = dz * input_data[j];
+                }
+            });
 
         // Step 3: db[i] = d_z[i]
-        for i in 0..self.out_size {
-            self.d_bias[&[i]] = d_z[&[i]];
-        }
+        self.d_bias.get_data_mut().copy_from_slice(&d_z_data);
 
         // Step 4: d_input = W^T @ d_z  [in_size]
-        let mut d_input = Tensor::new(vec![T::zero(); self.in_size], vec![self.in_size]);
-        for j in 0..self.in_size {
-            let mut sum = T::zero();
-            for i in 0..self.out_size {
-                sum = sum + self.weights[&[i, j]] * d_z[&[i]];
-            }
-            d_input[&[j]] = sum;
-        }
+        let weights_data = self.weights.get_data();
+        let d_input_data: Vec<T> = (0..self.in_size)
+            .into_par_iter()
+            .map(|j| {
+                let mut sum = T::zero();
+                for i in 0..self.out_size {
+                    sum = sum + weights_data[i * self.in_size + j] * d_z_data[i];
+                }
+                sum
+            })
+            .collect();
 
-        d_input
+        Tensor::new(d_input_data, vec![self.in_size])
     }
 }
 

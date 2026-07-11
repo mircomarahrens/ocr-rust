@@ -65,30 +65,35 @@ where
 
     let x_col_size = width * height;
     let x_col_shape = vec![filter_size, x_col_size];
-    let x_col_data = vec![zero(); mul_vals(&x_col_shape)];
+    let mut x_col_data = vec![T::zero(); filter_size * x_col_size];
 
-    let mut x_col = Tensor::new(x_col_data, x_col_shape);
+    let input_data = input_volume.get_data();
+    let input_shape = input_volume.shape();
+    let in_h = input_shape[1];
+    let in_d = input_shape[2];
+
     for i in 0..width {
         let x = i * stride;
         for j in 0..height {
             let y = j * stride;
+            let iy = i * height + j;
 
             for k in 0..spatial_extent[0] {
                 let xp = x + k;
+                let xp_offset = xp * in_h * in_d;
                 for l in 0..spatial_extent[1] {
                     let yp = y + l;
+                    let yp_offset = yp * in_d;
                     for c in 0..spatial_extent[2] {
                         let ix = (k * spatial_extent[1] + l) * spatial_extent[2] + c;
-                        let iy = i * height + j;
-
-                        x_col[&[ix, iy]] = input_volume[&[xp, yp, c]];
+                        x_col_data[ix * x_col_size + iy] = input_data[xp_offset + yp_offset + c];
                     }
                 }
             }
         }
     }
 
-    x_col
+    Tensor::new(x_col_data, x_col_shape)
 }
 
 /// Reverse of calc_x_col: accumulate column-format gradients back into spatial volume.
@@ -107,27 +112,36 @@ where
     T: Float + Sum,
 {
     let data_size: usize = padded_shape.iter().product();
-    let mut dx = Tensor::new(vec![T::zero(); data_size], padded_shape.to_vec());
+    let mut dx_data = vec![T::zero(); data_size];
+
+    let x_col_data = x_col.get_data();
+    let x_col_shape = x_col.shape();
+    let x_col_size = x_col_shape[1]; // out_w * out_h
+
+    let in_h = padded_shape[1];
+    let in_d = padded_shape[2];
 
     for i in 0..out_w {
         let x = i * stride;
         for j in 0..out_h {
             let y = j * stride;
+            let iy = i * out_h + j;
             for k in 0..spatial_extent[0] {
                 let xp = x + k;
+                let xp_offset = xp * in_h * in_d;
                 for l in 0..spatial_extent[1] {
                     let yp = y + l;
+                    let yp_offset = yp * in_d;
                     for c in 0..spatial_extent[2] {
                         let ix = (k * spatial_extent[1] + l) * spatial_extent[2] + c;
-                        let iy = i * out_h + j;
-                        dx[&[xp, yp, c]] = dx[&[xp, yp, c]] + x_col[&[ix, iy]];
+                        dx_data[xp_offset + yp_offset + c] = dx_data[xp_offset + yp_offset + c] + x_col_data[ix * x_col_size + iy];
                     }
                 }
             }
         }
     }
 
-    dx
+    Tensor::new(dx_data, padded_shape.to_vec())
 }
 
 #[cfg(test)]

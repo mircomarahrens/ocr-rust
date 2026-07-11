@@ -4,3 +4,4 @@ pub mod flatten_layer;
 pub mod im2col;
 pub mod layers;
 pub mod pooling_layer;
+pub mod lenet;

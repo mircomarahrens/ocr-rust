@@ -5,6 +5,7 @@ use num::traits::{Float, FromPrimitive};
 use std::iter::Sum;
 
 /// Flatten layer: reshapes [W, H, D] → [W*H*D]
+#[derive(Clone, Debug)]
 pub struct FlattenLayer {
     original_shape: Vec<usize>,
 }

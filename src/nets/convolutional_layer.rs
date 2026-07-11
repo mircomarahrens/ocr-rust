@@ -9,7 +9,7 @@ use crate::math::tensor::Tensor;
 use crate::nets::im2col::{calc_col_shape, calc_w_row, calc_x_col, col2im};
 
 // Add an activation enum
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub enum Activation {
     Sigmoid,
     Relu,
@@ -17,6 +17,7 @@ pub enum Activation {
 }
 
 // Convolutional layer for a neural network.
+#[derive(Clone, Debug)]
 pub struct ConvolutionalLayer<T>
 where
     T: Float + FromPrimitive,
@@ -106,35 +107,29 @@ where
 
 // Helper to apply activation in-place
 fn apply_activation_inplace<T: Float>(v: &mut Tensor<T>, act: Activation) {
-    let shape = v.shape().to_vec();
-    let (h, w, c) = (shape[0], shape[1], shape[2]);
-    for i in 0..h {
-        for j in 0..w {
-            for k in 0..c {
-                let x = v[&[i, j, k]];
-                let y = match act {
-                    Activation::Sigmoid => {
-                        let one = T::one();
-                        one / (one + (-x).exp())
-                    }
-                    Activation::Relu => {
-                        if x > T::zero() {
-                            x
-                        } else {
-                            T::zero()
-                        }
-                    }
-                    Activation::Tanh => x.tanh(),
-                };
-                v[&[i, j, k]] = y;
+    let data = v.get_data_mut();
+    for x in data.iter_mut() {
+        let val = *x;
+        *x = match act {
+            Activation::Sigmoid => {
+                let one = T::one();
+                one / (one + (-val).exp())
             }
-        }
+            Activation::Relu => {
+                if val > T::zero() {
+                    val
+                } else {
+                    T::zero()
+                }
+            }
+            Activation::Tanh => val.tanh(),
+        };
     }
 }
 
 impl<T> Layer<T> for ConvolutionalLayer<T>
 where
-    T: Float + Sum + FromPrimitive,
+    T: Float + Sum + FromPrimitive + Send + Sync,
     Standard: Distribution<T>,
 {
     fn forward(&mut self, input_volume: &mut Tensor<T>) -> Tensor<T> {
@@ -152,6 +147,7 @@ where
         let col_shape = calc_col_shape(input_volume, &self.spatial_extent, self.stride);
         let out_w = col_shape[0];
         let out_h = col_shape[1];
+        let out_positions = out_w * out_h;
 
         let x_col = calc_x_col(
             input_volume,
@@ -166,13 +162,17 @@ where
 
         // Build output [out_w, out_h, num_filters] with correct layout.
         // output[w, h, f] = y[f, w * out_h + h] + bias[f]
+        let y_data = y.get_data();
+        let bias_data = self.bias.get_data();
         let mut output_data = vec![T::zero(); out_w * out_h * self.num_filters];
         for f in 0..self.num_filters {
-            let b = self.bias[&[f]];
+            let b = bias_data[f];
+            let y_filter_offset = f * out_positions;
             for w in 0..out_w {
+                let w_offset = w * out_h;
                 for h in 0..out_h {
-                    let out_flat = (w * out_h + h) * self.num_filters + f;
-                    output_data[out_flat] = y[&[f, w * out_h + h]] + b;
+                    let out_flat = (w_offset + h) * self.num_filters + f;
+                    output_data[out_flat] = y_data[y_filter_offset + w_offset + h] + b;
                 }
             }
         }
@@ -209,34 +209,36 @@ where
 
         // Step 1: activation backward — modify d_out in-place using cached post-activation output
         if let Some(act) = self.activation {
-            for w in 0..out_w {
-                for h in 0..out_h {
-                    for f in 0..self.num_filters {
-                        let cached = out_cache[&[w, h, f]];
-                        let grad = d_out[&[w, h, f]];
-                        d_out[&[w, h, f]] = match act {
-                            Activation::Relu => {
-                                if cached > T::zero() {
-                                    grad
-                                } else {
-                                    T::zero()
-                                }
-                            }
-                            Activation::Sigmoid => grad * cached * (T::one() - cached),
-                            Activation::Tanh => grad * (T::one() - cached * cached),
-                        };
+            let out_cache_data = out_cache.get_data();
+            let d_out_data = d_out.get_data_mut();
+            for i in 0..d_out_data.len() {
+                let cached = out_cache_data[i];
+                let grad = d_out_data[i];
+                d_out_data[i] = match act {
+                    Activation::Relu => {
+                        if cached > T::zero() {
+                            grad
+                        } else {
+                            T::zero()
+                        }
                     }
-                }
+                    Activation::Sigmoid => grad * cached * (T::one() - cached),
+                    Activation::Tanh => grad * (T::one() - cached * cached),
+                };
             }
         }
 
         // Step 2: convert d_out [out_w, out_h, num_filters] -> d_y [num_filters, out_positions]
         // mirrors the layout built in forward: output[w, h, f] <-> y[f, w * out_h + h]
+        let d_out_data = d_out.get_data();
         let mut d_y_data = vec![T::zero(); self.num_filters * out_positions];
         for f in 0..self.num_filters {
+            let d_y_filter_offset = f * out_positions;
             for w in 0..out_w {
+                let w_offset = w * out_h;
                 for h in 0..out_h {
-                    d_y_data[f * out_positions + w * out_h + h] = d_out[&[w, h, f]];
+                    let d_out_flat = (w_offset + h) * self.num_filters + f;
+                    d_y_data[d_y_filter_offset + w_offset + h] = d_out_data[d_out_flat];
                 }
             }
         }
@@ -246,12 +248,15 @@ where
         self.d_weights = matmul_transpose_b(&d_y, &x_col);
 
         // Step 4: db[f] = sum(d_y[f, :])
+        let d_bias_data = self.d_bias.get_data_mut();
+        let d_y_data = d_y.get_data();
         for f in 0..self.num_filters {
             let mut s = T::zero();
+            let d_y_filter_offset = f * out_positions;
             for p in 0..out_positions {
-                s = s + d_y[&[f, p]];
+                s = s + d_y_data[d_y_filter_offset + p];
             }
-            self.d_bias[&[f]] = s;
+            d_bias_data[f] = s;
         }
 
         // Step 5: d_x_col = W^T @ d_y  [filter_size, out_positions]
