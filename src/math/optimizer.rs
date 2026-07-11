@@ -8,6 +8,8 @@ where
 {
     pub learning_rate: T,
     pub momentum: Option<T>,
+    /// L2 regularization coefficient applied to weights (not bias).
+    pub weight_decay: T,
     velocity_weights: Option<Tensor<T>>,
     velocity_bias: Option<Tensor<T>>,
 }
@@ -21,6 +23,7 @@ where
         SGD {
             learning_rate,
             momentum: None,
+            weight_decay: T::zero(),
             velocity_weights: None,
             velocity_bias: None,
         }
@@ -31,13 +34,36 @@ where
         SGD {
             learning_rate,
             momentum: Some(momentum),
+            weight_decay: T::zero(),
+            velocity_weights: None,
+            velocity_bias: None,
+        }
+    }
+
+    /// Create SGD optimizer with momentum and L2 weight decay
+    pub fn with_momentum_and_decay(learning_rate: T, momentum: T, weight_decay: T) -> Self {
+        SGD {
+            learning_rate,
+            momentum: Some(momentum),
+            weight_decay,
+            velocity_weights: None,
+            velocity_bias: None,
+        }
+    }
+
+    /// Create SGD optimizer with L2 weight decay (no momentum)
+    pub fn with_decay(learning_rate: T, weight_decay: T) -> Self {
+        SGD {
+            learning_rate,
+            momentum: None,
+            weight_decay,
             velocity_weights: None,
             velocity_bias: None,
         }
     }
 
     /// Update weights using gradient
-    /// w = w - learning_rate * d_weights
+    /// w = w - learning_rate * (d_weights + weight_decay * w)
     pub fn update_weights(&mut self, weights: &mut Tensor<T>, d_weights: &Tensor<T>) {
         let shape = weights.shape();
 
@@ -51,16 +77,19 @@ where
             }
 
             let velocity = self.velocity_weights.as_mut().unwrap();
-            // v = m * v + (1 - m) * d_weights
-            // Actually: v = m * v - learning_rate * d_weights
+            // v = m * v - lr * (dw + wd * w)
             for (i, dw) in d_weights.get_data().iter().enumerate() {
-                velocity.get_data_mut()[i] = m * velocity.get_data()[i] - self.learning_rate * *dw;
+                let effective_grad = *dw + self.weight_decay * weights.get_data()[i];
+                velocity.get_data_mut()[i] =
+                    m * velocity.get_data()[i] - self.learning_rate * effective_grad;
                 weights.get_data_mut()[i] = weights.get_data()[i] + velocity.get_data()[i];
             }
         } else {
-            // Standard SGD: w = w - learning_rate * d_weights
+            // w = w - lr * (dw + wd * w)
             for (i, dw) in d_weights.get_data().iter().enumerate() {
-                weights.get_data_mut()[i] = weights.get_data()[i] - self.learning_rate * *dw;
+                let effective_grad = *dw + self.weight_decay * weights.get_data()[i];
+                weights.get_data_mut()[i] =
+                    weights.get_data()[i] - self.learning_rate * effective_grad;
             }
         }
     }

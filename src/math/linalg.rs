@@ -84,13 +84,22 @@ where
     arr.iter().fold(T::one(), |acc, &x| acc * x)
 }
 
-/// Function to retrieve a vector of standard distribution random values
+/// Initialize weights with small zero-centered values.
+///
+/// Keeping initial activations near zero is important for stable CNN training,
+/// especially with ReLU and softmax output layers.
 pub fn init_random_vec<T>(size: usize) -> Vec<T>
 where
     T: Float + FromPrimitive,
 {
     let mut rng = rand::thread_rng();
-    (0..size).map(|_| T::from_f64(rng.gen()).unwrap()).collect()
+    let scale = 0.05_f64;
+    (0..size)
+        .map(|_| {
+            let v = (rng.gen::<f64>() * 2.0 - 1.0) * scale;
+            T::from_f64(v).unwrap()
+        })
+        .collect()
 }
 
 /// Function to find the maximum value in a tensor

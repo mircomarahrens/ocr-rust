@@ -12,15 +12,148 @@
 cargo run --release -- \
    --train-images data/train-images-idx3-ubyte \
    --train-labels data/train-labels-idx1-ubyte \
-   --num-epochs 10 \
-   --batch-size 32 \
-   --learning-rate 0.01
+    --num-train-images 60000 \
+    --num-epochs 15 \
+    --batch-size 64 \
+    --learning-rate 0.001 \
+   --momentum 0.9 \
+    --lr-decay 0.995 \
+   --val-split 0.1 \
+    --lr-plateau-patience 0 \
+   --lr-plateau-factor 0.5 \
+    --min-learning-rate 0.00005 \
+    --dropout 0.0 \
+    --weight-decay 0.0 \
+    --aug-shift 0 \
+   --output-dir experiments
 ```
+
+## Recommended Defaults (Validated)
+
+Validated on full MNIST train set (60,000 images) in `experiments/run_1783716542`:
+
+- `--num-train-images 60000`
+- `--num-epochs 15`
+- `--batch-size 64`
+- `--learning-rate 0.001`
+- `--momentum 0.9`
+- `--lr-decay 0.995`
+- `--val-split 0.1`
+- `--lr-plateau-patience 0` (disabled)
+- `--min-learning-rate 0.00005`
+- `--dropout 0.0`
+- `--weight-decay 0.0`
+- `--aug-shift 0`
+
+Observed outcome in that run:
+
+- Final epoch: `train_accuracy=99.73%`, `val_accuracy=99.70%`
+- Peak validation observed: `99.77%`
+
+## Quick Benchmarks
+
+Use these presets for fast sanity checks and full-quality training.
+
+### 1k smoke test (very fast)
+
+```bash
+cargo run --release -- \
+   --train-images data/train-images-idx3-ubyte \
+   --train-labels data/train-labels-idx1-ubyte \
+   --num-train-images 1000 \
+   --num-epochs 3 \
+   --batch-size 64 \
+   --learning-rate 0.001 \
+   --momentum 0.9 \
+   --lr-decay 0.995 \
+   --val-split 0.1 \
+   --lr-plateau-patience 0 \
+   --min-learning-rate 0.00005 \
+   --dropout 0.0 \
+   --weight-decay 0.0 \
+   --aug-shift 0 \
+   --output-dir experiments
+```
+
+### 10k dev run (medium)
+
+```bash
+cargo run --release -- \
+   --train-images data/train-images-idx3-ubyte \
+   --train-labels data/train-labels-idx1-ubyte \
+   --num-train-images 10000 \
+   --num-epochs 10 \
+   --batch-size 64 \
+   --learning-rate 0.001 \
+   --momentum 0.9 \
+   --lr-decay 0.995 \
+   --val-split 0.1 \
+   --lr-plateau-patience 0 \
+   --min-learning-rate 0.00005 \
+   --dropout 0.0 \
+   --weight-decay 0.0 \
+   --aug-shift 0 \
+   --output-dir experiments
+```
+
+### 60k full training (recommended)
+
+```bash
+cargo run --release -- \
+   --train-images data/train-images-idx3-ubyte \
+   --train-labels data/train-labels-idx1-ubyte \
+   --num-train-images 60000 \
+   --num-epochs 15 \
+   --batch-size 64 \
+   --learning-rate 0.001 \
+   --momentum 0.9 \
+   --lr-decay 0.995 \
+   --val-split 0.1 \
+   --lr-plateau-patience 0 \
+   --min-learning-rate 0.00005 \
+   --dropout 0.0 \
+   --weight-decay 0.0 \
+   --aug-shift 0 \
+   --output-dir experiments
+```
+
+## CLI Parameters
+
+- `--train-images`: path to training images IDX file (required).
+- `--train-labels`: path to training labels IDX file (required).
+- `--num-train-images`: number of samples to train on (optional, capped by available samples).
+- `--num-epochs`: number of training epochs (default: `5`).
+- `--batch-size`: mini-batch size (default: `32`).
+- `--learning-rate`: base learning rate (default: `0.01`).
+- `--momentum`: SGD momentum in `[0, 1)` (optional).
+- `--lr-decay`: base per-epoch LR multiplier (default: `1.0`).
+- `--val-split`: fraction of selected samples used for validation each epoch (default: `0.1`).
+- `--lr-plateau-patience`: epochs without val-loss improvement before reducing LR (default: `0`, disabled).
+- `--lr-plateau-factor`: multiplier used when LR is reduced on plateau (default: `0.5`).
+- `--min-learning-rate`: lower bound for LR after decay/reduction (default: `0.00001`).
+- `--dropout`: inverted dropout rate applied to dense1 and dense2 during training (default: `0.0`, disabled).
+- `--weight-decay`: L2 regularization coefficient applied to all weight updates (default: `0.0`, disabled).
+- `--aug-shift`: maximum random pixel shift (in each direction) applied to training images (default: `0`, disabled). `2` is a good starting value.
+- `--output-dir`: base folder for saved artifacts (default: `experiments`).
 
 Notes:
 
 - CLI flags use kebab-case (for example, `--train-images`, not `--train_images`).
 - Labels are read as single-byte MNIST label values.
+- `--num-train-images` is optional and capped to available samples in the files.
+- Training uses all available train samples from the provided IDX files.
+- Samples are shuffled each epoch.
+- A train/validation split is used each epoch and is configurable with `--val-split`.
+- Momentum is optional (`--momentum 0.9` is a common choice).
+- Learning-rate decay is multiplicative per epoch (`lr = lr * lr_decay`) and can be combined with validation-plateau reduction.
+
+## Saved Results
+
+After each training run, a folder is created under the output directory:
+
+- `run_<timestamp>/metrics.csv`: epoch metrics (`train_loss`, `train_accuracy`, `val_loss`, `val_accuracy`, `lr`).
+- `run_<timestamp>/weights/`: final weights and biases for all trainable layers.
+- `run_<timestamp>/summary.txt`: run configuration and artifact paths.
 
 ## Prepare data
 

@@ -16,7 +16,7 @@ where
     for i in 0..num_filters {
         let weights: Vec<T> = init_random_vec(filter_size);
         for (j, e) in weights.iter().enumerate() {
-            w_row_data[j + i * num_filters] = *e;
+            w_row_data[j + i * filter_size] = *e;
         }
     }
     Tensor::new(w_row_data, w_row_shape)

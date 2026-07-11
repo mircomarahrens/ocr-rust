@@ -57,6 +57,11 @@ where
     activation: Option<Activation>,
     cached_input: Option<Tensor<T>>, // input [in_size] cached for backward
     cached_output: Option<Tensor<T>>, // post-activation output [out_size] cached
+    /// Fraction of outputs to randomly zero during training (inverted dropout).
+    pub dropout_rate: Option<T>,
+    /// True during training; False during inference (no dropout applied).
+    pub training: bool,
+    dropout_mask: Vec<bool>, // true = keep, false = dropped
 }
 
 impl<T> DenseLayer<T>
@@ -81,6 +86,9 @@ where
             activation: None,
             cached_input: None,
             cached_output: None,
+            dropout_rate: None,
+            training: true,
+            dropout_mask: Vec::new(),
         }
     }
 
@@ -88,6 +96,21 @@ where
         let mut layer = Self::new(in_size, out_size);
         layer.activation = Some(activation);
         layer
+    }
+
+    pub fn with_dropout(
+        in_size: usize,
+        out_size: usize,
+        activation: Activation,
+        dropout_rate: T,
+    ) -> Self {
+        let mut layer = Self::with_activation(in_size, out_size, activation);
+        layer.dropout_rate = Some(dropout_rate);
+        layer
+    }
+
+    pub fn set_training(&mut self, training: bool) {
+        self.training = training;
     }
 }
 
@@ -129,6 +152,26 @@ where
             }
         }
 
+        // Inverted dropout: applied after activation, only in training mode.
+        if self.training {
+            if let Some(rate) = self.dropout_rate {
+                let scale = T::one() / (T::one() - rate);
+                self.dropout_mask = (0..self.out_size)
+                    .map(|_| {
+                        let sample = T::from_f64(rand::random::<f64>()).unwrap_or(T::zero());
+                        sample >= rate
+                    })
+                    .collect();
+                for i in 0..self.out_size {
+                    if !self.dropout_mask[i] {
+                        output[&[i]] = T::zero();
+                    } else {
+                        output[&[i]] = output[&[i]] * scale;
+                    }
+                }
+            }
+        }
+
         self.cached_output = Some(output.clone());
         output
     }
@@ -154,6 +197,22 @@ where
             }
         } else {
             d_z = d_out.clone();
+        }
+
+        // Apply dropout mask to d_z so dropped units receive zero gradient.
+        if !self.dropout_mask.is_empty() {
+            let scale = if let Some(rate) = self.dropout_rate {
+                T::one() / (T::one() - rate)
+            } else {
+                T::one()
+            };
+            for i in 0..self.out_size {
+                if !self.dropout_mask[i] {
+                    d_z[&[i]] = T::zero();
+                } else {
+                    d_z[&[i]] = d_z[&[i]] * scale;
+                }
+            }
         }
 
         // Step 2: dW = d_z @ x^T  [out_size, in_size]
