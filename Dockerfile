@@ -5,7 +5,7 @@ FROM rust:1.76-bookworm AS builder
 WORKDIR /usr/src/ocrrs
 
 # Copy configuration files
-COPY Cargo.toml Cargo.lock ./
+COPY Cargo.toml Cargo.lock* ./
 
 # Create dummy source files to pre-compile and cache dependencies
 RUN mkdir -p src/nets src/math src/data src/bin && \
