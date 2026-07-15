@@ -1,0 +1,76 @@
+name: Build and Push Docker Images
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Downcase image names
+        run: |
+          # GHCR requires lower-case image names
+          echo "IMAGE_NAME_TRAIN=${{ env.REGISTRY }}/$(echo "${{ github.repository }}/train" | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+          echo "IMAGE_NAME_SERVER=${{ env.REGISTRY }}/$(echo "${{ github.repository }}/server" | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
+      - name: Extract metadata (tags, labels) for Train image
+        id: meta-train
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME_TRAIN }}
+          tags: |
+            type=raw,value=latest
+            type=sha,format=short
+
+      - name: Build and push Train Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          target: train
+          push: true
+          tags: ${{ steps.meta-train.outputs.tags }}
+          labels: ${{ steps.meta-train.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Extract metadata (tags, labels) for Server image
+        id: meta-server
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME_SERVER }}
+          tags: |
+            type=raw,value=latest
+            type=sha,format=short
+
+      - name: Build and push Server Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          target: server
+          push: true
+          tags: ${{ steps.meta-server.outputs.tags }}
+          labels: ${{ steps.meta-server.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
