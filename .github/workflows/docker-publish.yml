@@ -32,8 +32,9 @@ jobs:
       - name: Downcase image names
         run: |
           # GHCR requires lower-case image names
-          echo "IMAGE_NAME_TRAIN=${{ env.REGISTRY }}/$(echo "${{ github.repository }}/train" | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
-          echo "IMAGE_NAME_SERVER=${{ env.REGISTRY }}/$(echo "${{ github.repository }}/server" | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+          OWNER_LOWER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "IMAGE_NAME_TRAIN=${{ env.REGISTRY }}/${OWNER_LOWER}/ocr-rust-train" >> $GITHUB_ENV
+          echo "IMAGE_NAME_SERVER=${{ env.REGISTRY }}/${OWNER_LOWER}/ocr-rust-server" >> $GITHUB_ENV
 
       - name: Extract metadata (tags, labels) for Train image
         id: meta-train
