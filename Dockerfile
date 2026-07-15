@@ -1,7 +1,7 @@
 # ==============================================================================
 # STAGE 1: Builder (Shared compilation environment)
 # ==============================================================================
-FROM rust:1.76-bookworm AS builder
+FROM rust:1.85-bookworm AS builder
 WORKDIR /usr/src/ocrrs
 
 # Copy configuration files
